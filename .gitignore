@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.env
+.env.local
+*.log
+expo-start.log
+server/api.log
+server/node_modules/
+server/.env
+expo-go-qr.png
+.DS_Store

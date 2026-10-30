@@ -1,0 +1,48 @@
+{
+  "name": "mali-stock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API d'authentification Mali Stock — Node.js, Express et MySQL",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "db:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-mysql.ps1",
+    "db:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-mysql.ps1",
+    "db:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-mysql.ps1",
+    "db:init": "node scripts/init-db.js",
+    "db:seed": "node scripts/seed.js",
+    "seed:stock": "node scripts/seed-stock-demo.js",
+    "seed:accounts": "node scripts/seed-accounts.js",
+    "migrate:admin": "node scripts/migrate-005-admin.js",
+    "migrate:sellers": "node scripts/migrate-006-sellers.js",
+    "db:migrate": "node scripts/migrate-001-security.js && node scripts/migrate-002-totp.js && node scripts/migrate-003-stock.js && node scripts/migrate-004-network.js && node scripts/migrate-005-admin.js && node scripts/migrate-006-sellers.js",
+    "test:auth": "node scripts/test-auth-flow.js",
+    "test:email": "node scripts/test-real-email.js",
+    "test:2fa": "node scripts/test-2fa.js",
+    "test:stock": "node scripts/test-stock.js",
+    "test:network": "node scripts/test-network.js",
+    "mail:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-mailpit.ps1",
+    "mail:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-mailpit.ps1",
+    "clean:test": "node scripts/cleanup-tests.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@types/qrcode": "^1.5.6",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "google-auth-library": "^10.5.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.15.3",
+    "nodemailer": "^10.2.1",
+    "otplib": "^13.5.0",
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4"
+  }
+}

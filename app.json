@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Mali Stock",
+    "slug": "mali-stock",
+    "version": "1.0.0",
+    "scheme": "mali-stock",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.malistock.app"
+    },
+    "android": {
+      "package": "com.malistock.app"
+    },
+    "extra": {
+      "palette": "04-bogolan-tricolore"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-sharing"
+    ]
+  }
+}

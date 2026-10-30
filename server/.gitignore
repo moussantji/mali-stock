@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+
+# Binaire Mailpit téléchargé automatiquement par scripts/start-mailpit.ps1
+tools/mailpit/
