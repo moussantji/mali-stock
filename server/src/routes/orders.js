@@ -1,9 +1,10 @@
 /**
- * Commandes comptoir — le réseau commerce.
- *  - Client (standard) : scanne le QR du produit en boutique → commande (quantité souhaitée).
- *  - Vendeur (pro) : voit la commande, confirme/ajuste/refuse, encaisse
- *    (Espèces, Orange Money, Moov, Wave) → sortie de stock journalisée automatiquement.
- *  Rôles stricts : le pro ne commande pas, le standard ne vend pas.
+ * Commandes comptoir — gestion vendeur.
+ *  - Le vendeur crée une commande sans compte client (client comptoir facultatif).
+ *  - Il confirme/ajuste/refuse, encaisse (Espèces, Orange Money, Moov, Wave)
+ *    et la sortie de stock est journalisée automatiquement.
+ *  - L'ancienne route client reste disponible pour les commandes historiques,
+ *    mais l'application mobile ne propose plus d'espace acheteur.
  */
 const express = require("express");
 const rateLimit = require("express-rate-limit");
@@ -43,10 +44,11 @@ function initialsOf(name) {
 /** Fiche publique d'une personne (client pour le vendeur, vendeur pour le client). */
 function publicCounterpart(row) {
   return {
-    id: String(row.id),
-    name: row.name,
+    id: row.id ? String(row.id) : null,
+    name: row.name || "Client comptoir",
     initials: initialsOf(row.shop_name || row.name),
-    accountType: row.account_type,
+    accountType: row.account_type || null,
+    phone: row.phone || null,
     shopName: row.shop_name || null,
     category: row.shop_category || null,
     city: row.shop_city || null,
@@ -92,7 +94,7 @@ const ORDER_SELECT = `
   FROM orders o
   JOIN products p ON p.id = o.product_id
   JOIN users u_vendor ON u_vendor.id = o.vendor_id
-  JOIN users u_client ON u_client.id = o.user_id`;
+  LEFT JOIN users u_client ON u_client.id = o.user_id`;
 
 function mapJoinedOrder(row, viewer) {
   const vendorInfo = publicCounterpart({
@@ -105,8 +107,9 @@ function mapJoinedOrder(row, viewer) {
   });
   const clientInfo = publicCounterpart({
     id: row.user_id,
-    name: row.client_name,
-    account_type: row.client_account_type,
+    name: row.customer_name || row.client_name,
+    account_type: row.customer_name ? null : row.client_account_type,
+    phone: row.customer_phone,
   });
   const base = {
     product_name: row.product_name,
@@ -160,6 +163,65 @@ router.post(
 
     const [created] = await pool.execute(`${ORDER_SELECT} WHERE o.id = ? LIMIT 1`, [result.insertId]);
     return res.status(201).json({ order: mapJoinedOrder(created[0], "standard") });
+  })
+);
+
+/* ── Vendeur : crée une commande sans compte client ───────── */
+router.post(
+  "/manual",
+  orderLimiter,
+  requireRole("pro"),
+  asyncHandler(async (req, res) => {
+    const productId = Number.parseInt(req.body?.productId, 10);
+    const quantity = toNumber(req.body?.quantity, NaN);
+    const customerName = cleanString(req.body?.customerName).replace(/\s+/g, " ").slice(0, 120);
+    const customerPhone = cleanString(req.body?.customerPhone).slice(0, 40);
+    const note = cleanString(req.body?.note).slice(0, 255) || null;
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: "Choisis un produit." });
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1e6) {
+      return res.status(400).json({ message: "Indique une quantité valide." });
+    }
+
+    const [rows] = await pool.execute(
+      "SELECT * FROM products WHERE id = ? AND user_id = ? LIMIT 1",
+      [productId, req.user.id]
+    );
+    const product = rows[0];
+    if (!product) {
+      return res.status(404).json({ message: "Produit introuvable dans ton stock." });
+    }
+    if (toNumber(product.quantity) < quantity) {
+      return res.status(409).json({
+        code: "INSUFFICIENT_STOCK",
+        message: `Stock insuffisant : ${toNumber(product.quantity)} ${product.unit} disponibles.`,
+      });
+    }
+
+    const unitPrice = toNumber(product.sale_price);
+    const total = Math.round(quantity * unitPrice * 100) / 100;
+
+    const [result] = await pool.execute(
+      `INSERT INTO orders
+         (user_id, vendor_id, product_id, customer_name, customer_phone, quantity,
+          unit_price, total, note)
+       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.user.id,
+        product.id,
+        customerName || null,
+        customerPhone || null,
+        quantity,
+        unitPrice,
+        total,
+        note,
+      ]
+    );
+
+    const [created] = await pool.execute(`${ORDER_SELECT} WHERE o.id = ? LIMIT 1`, [result.insertId]);
+    return res.status(201).json({ order: mapJoinedOrder(created[0], "pro") });
   })
 );
 

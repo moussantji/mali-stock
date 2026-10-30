@@ -35,10 +35,12 @@ export interface PublicFiche {
 }
 
 export interface OrderCounterpart {
-  id: string;
+  id: string | null;
   name: string;
   initials: string;
-  accountType: "standard" | "pro";
+  /** null = client comptoir sans compte Mali Stock. */
+  accountType: "standard" | "pro" | null;
+  phone: string | null;
   shopName: string | null;
   category: string | null;
   city: string | null;
@@ -46,9 +48,9 @@ export interface OrderCounterpart {
 
 export interface ApiOrder {
   id: string;
-  /** Présent côté acheteur : la boutique où la commande a été passée. */
+  /** Présent côté acheteur historique : la boutique où la commande a été passée. */
   vendor?: OrderCounterpart;
-  /** Présent côté vendeur : le client qui a commandé. */
+  /** Présent côté vendeur : le client, avec ou sans compte. */
   client?: OrderCounterpart;
   product: {
     id: string;
@@ -115,6 +117,23 @@ export const ordersApi = {
 
   create(token: string, input: { qrToken: string; quantity: number; note?: string | null }) {
     return apiRequest<{ order: ApiOrder }>("/api/orders", {
+      method: "POST",
+      body: input,
+      token,
+    });
+  },
+
+  createManual(
+    token: string,
+    input: {
+      productId: string;
+      quantity: number;
+      customerName?: string | null;
+      customerPhone?: string | null;
+      note?: string | null;
+    }
+  ) {
+    return apiRequest<{ order: ApiOrder }>("/api/orders/manual", {
       method: "POST",
       body: input,
       token,

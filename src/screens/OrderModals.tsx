@@ -4,7 +4,7 @@
  *  - PaymentModal : encaisser en espèces ou mobile money (sortie de stock) ;
  *  - DeclineOrderModal : refuser avec un motif pour le client.
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -27,6 +27,7 @@ import {
   type ApiOrder,
   type PaymentMethod,
 } from "../api/orders";
+import type { ApiProduct } from "../api/products";
 import { OrderStatusChip } from "../ui/OrderStatusChip";
 import { useAppDialog } from "../ui/AppDialog";
 
@@ -96,10 +97,16 @@ function OrderSummary({ order }: { order: ApiOrder }) {
           <Text style={styles.clientInitials}>{order.client?.initials ?? "MS"}</Text>
         </View>
         <View style={styles.summaryTopText}>
-          <Text style={styles.clientName} numberOfLines={1}>{order.client?.name ?? "Client"}</Text>
+          <Text style={styles.clientName} numberOfLines={1}>{order.client?.name ?? "Client comptoir"}</Text>
           <Text style={styles.summaryMeta} numberOfLines={1}>
-            {order.client?.accountType === "pro" ? "Compte pro" : "Compte acheteur"} ·{" "}
-            {formatDateTimeShort(order.createdAt)}
+            {order.client?.accountType === "pro"
+              ? "Compte vendeur"
+              : order.client?.accountType === "standard"
+                ? "Compte client historique"
+                : order.client?.phone
+                  ? order.client.phone
+                  : "Client comptoir"}{" "}
+            · {formatDateTimeShort(order.createdAt)}
           </Text>
         </View>
         <OrderStatusChip status={order.status} compact />
@@ -198,8 +205,7 @@ export function ConfirmOrderModal({
         title: "Commande confirmée",
         message: [
           `${formatQuantity(quantity)} ${unit} réservés pour ${order.client?.name ?? "le client"}.`,
-          "Le client voit la confirmation dans son onglet Commandes.",
-          "Encaisse dès qu'il se présente au comptoir.",
+          "Encaisse dès que le client se présente au comptoir.",
         ].join("\n"),
         variant: "success",
         icon: "checkmark-circle-outline",
@@ -281,11 +287,11 @@ export function ConfirmOrderModal({
         </Text>
       ) : null}
 
-      <Text style={styles.fieldLabel}>Message au client (facultatif)</Text>
+      <Text style={styles.fieldLabel}>Note pour la commande (facultatif)</Text>
       <TextInput
         value={vendorNote}
         onChangeText={setVendorNote}
-        placeholder="Ex. je prépare ta commande"
+        placeholder="Ex. commande préparée pour vendredi"
         placeholderTextColor={colors.textMuted}
         maxLength={255}
         editable={!submitting}
@@ -563,7 +569,7 @@ export function DeclineOrderModal({
       onClose();
       await dialog.alert({
         title: "Commande refusée",
-        message: "Le client verra ton motif dans son onglet Commandes.",
+        message: "La commande est clôturée. Le stock n'a pas été modifié.",
         variant: "info",
         icon: "close-circle-outline",
         confirmLabel: "OK",
@@ -585,7 +591,7 @@ export function DeclineOrderModal({
       onClose={onClose}
       icon="close-circle-outline"
       title="Refuser la commande"
-      subtitle="Le client sera informé du motif"
+      subtitle="La commande sera clôturée sans toucher au stock"
     >
       <OrderSummary order={order} />
 
@@ -604,7 +610,7 @@ export function DeclineOrderModal({
       <View style={styles.declineWarning}>
         <Ionicons name="information-circle-outline" size={15} color={colors.stockOut} />
         <Text style={styles.declineWarningText}>
-          Le stock n'est pas modifié. Le client pourra rescanner le produit plus tard.
+          Le stock n'est pas modifié. Tu pourras créer une nouvelle commande si besoin.
         </Text>
       </View>
 
@@ -638,6 +644,345 @@ export function DeclineOrderModal({
           )}
         </LinearGradient>
       </Pressable>
+    </Sheet>
+  );
+}
+
+/* ── Création d'une commande vendeur ──────────────────────── */
+
+export function CreateOrderModal({
+  visible,
+  token,
+  products,
+  onClose,
+  onDone,
+}: {
+  visible: boolean;
+  token: string;
+  products: ApiProduct[];
+  onClose: () => void;
+  onDone: () => void | Promise<void>;
+}) {
+  const dialog = useAppDialog();
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [qtyText, setQtyText] = useState("1");
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setQuery("");
+    setSelectedId(null);
+    setQtyText("1");
+    setCustomerName("");
+    setCustomerPhone("");
+    setNote("");
+    setError(null);
+    setSubmitting(false);
+  }, [visible]);
+
+  const selected = products.find((product) => product.id === selectedId) ?? null;
+  const unit = selected?.unit ?? "unité";
+  const quantity = parseDecimal(qtyText);
+  const validQuantity = Number.isFinite(quantity) && quantity > 0;
+  const insufficient = Boolean(selected && validQuantity && quantity > selected.quantity);
+  const total = selected && validQuantity ? Math.round(quantity * selected.salePrice * 100) / 100 : 0;
+
+  const results = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return products
+      .filter((product) => product.quantity > 0)
+      .filter(
+        (product) =>
+          !needle ||
+          product.name.toLowerCase().includes(needle) ||
+          product.sku.toLowerCase().includes(needle) ||
+          (product.category ?? "").toLowerCase().includes(needle)
+      )
+      .slice(0, 20);
+  }, [products, query]);
+
+  const step = (delta: number) => {
+    const current = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+    const next = Math.max(0.01, Math.round((current + delta) * 100) / 100);
+    setQtyText(String(next).replace(".", ","));
+    setError(null);
+  };
+
+  const submit = async () => {
+    if (submitting) return;
+    if (!selected) {
+      setError("Choisis le produit concerné par la commande.");
+      return;
+    }
+    if (!validQuantity) {
+      setError("Indique une quantité supérieure à 0.");
+      return;
+    }
+    if (quantity > selected.quantity) {
+      setError(`Stock insuffisant : ${formatQuantity(selected.quantity)} ${unit} disponibles.`);
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      await ordersApi.createManual(token, {
+        productId: selected.id,
+        quantity,
+        customerName: customerName.trim() || null,
+        customerPhone: customerPhone.trim() || null,
+        note: note.trim() || null,
+      });
+      await onDone();
+      onClose();
+      await dialog.alert({
+        title: "Commande enregistrée",
+        message: [
+          `${formatQuantity(quantity)} ${unit} · ${selected.name}`,
+          customerName.trim() ? `Client : ${customerName.trim()}` : "Client comptoir",
+          "Tu peux maintenant la confirmer puis l'encaisser.",
+        ].join("\n"),
+        variant: "success",
+        icon: "receipt-outline",
+        confirmLabel: "OK",
+      });
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : "Impossible d'enregistrer cette commande."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      icon="add-circle-outline"
+      title="Nouvelle commande"
+      subtitle="Enregistre une vente ou une réservation comptoir"
+    >
+      {!selected ? (
+        <>
+          <View style={styles.pickerIntro}>
+            <Ionicons name="cube-outline" size={15} color={colors.primary} />
+            <Text style={styles.pickerIntroText}>
+              Choisis un produit de ton stock. Les produits en rupture ne sont pas proposés.
+            </Text>
+          </View>
+
+          <View style={styles.searchWrap}>
+            <Ionicons name="search-outline" size={17} color={colors.textMuted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Rechercher un produit…"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.searchInput}
+            />
+            {query ? (
+              <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Effacer la recherche">
+                <Ionicons name="close-circle" size={17} color={colors.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          {results.length === 0 ? (
+            <View style={styles.pickerEmpty}>
+              <Ionicons name="cube-outline" size={24} color={colors.textMuted} />
+              <Text style={styles.pickerEmptyText}>
+                {products.some((product) => product.quantity > 0)
+                  ? "Aucun produit ne correspond à cette recherche."
+                  : "Aucun produit en stock. Ajoute d'abord un produit dans ton inventaire."}
+              </Text>
+            </View>
+          ) : (
+            results.map((product) => (
+              <Pressable
+                key={product.id}
+                onPress={() => {
+                  setSelectedId(product.id);
+                  setQtyText("1");
+                  setError(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Choisir ${product.name}`}
+                style={({ pressed }) => [styles.productOption, pressed && styles.pressed]}
+              >
+                <View style={styles.productOptionIcon}>
+                  <Ionicons name="cube-outline" size={17} color={colors.primary} />
+                </View>
+                <View style={styles.productOptionText}>
+                  <Text style={styles.productOptionName} numberOfLines={1}>{product.name}</Text>
+                  <Text style={styles.productOptionMeta} numberOfLines={1}>
+                    {product.sku} · {formatQuantity(product.quantity)} {product.unit} en stock
+                  </Text>
+                </View>
+                <View style={styles.productOptionRight}>
+                  <Text style={styles.productOptionPrice}>{formatFcfa(product.salePrice)}</Text>
+                  <Ionicons name="chevron-forward" size={15} color={colors.textMuted} />
+                </View>
+              </Pressable>
+            ))
+          )}
+        </>
+      ) : (
+        <>
+          <View style={styles.selectedProduct}>
+            <View style={styles.selectedProductIcon}>
+              <Ionicons name="cube" size={18} color={colors.primary} />
+            </View>
+            <View style={styles.selectedProductText}>
+              <Text style={styles.selectedProductName} numberOfLines={1}>{selected.name}</Text>
+              <Text style={styles.selectedProductMeta} numberOfLines={1}>
+                {selected.sku} · {formatFcfa(selected.salePrice)} / {selected.unit}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => setSelectedId(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Changer de produit"
+              hitSlop={8}
+            >
+              <Text style={styles.changeLink}>Changer</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.stockHintRow}>
+            <Ionicons name="layers-outline" size={14} color={colors.primary} />
+            <Text style={styles.stockHintText}>
+              Stock disponible : {formatQuantity(selected.quantity)} {selected.unit}
+            </Text>
+          </View>
+
+          <Text style={styles.fieldLabel}>Quantité</Text>
+          <View style={styles.stepperRow}>
+            <Pressable
+              onPress={() => step(-1)}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel="Diminuer la quantité"
+              style={({ pressed }) => [styles.stepBtn, pressed && styles.pressed, submitting && styles.disabled]}
+            >
+              <Ionicons name="remove" size={20} color={colors.primary} />
+            </Pressable>
+            <View style={styles.qtyWrap}>
+              <TextInput
+                value={qtyText}
+                onChangeText={(text) => {
+                  setQtyText(text);
+                  setError(null);
+                }}
+                keyboardType="decimal-pad"
+                editable={!submitting}
+                style={styles.qtyInput}
+                selectTextOnFocus
+                accessibilityLabel="Quantité commandée"
+              />
+              <Text style={styles.qtyUnit} numberOfLines={1}>{selected.unit}</Text>
+            </View>
+            <Pressable
+              onPress={() => step(1)}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel="Augmenter la quantité"
+              style={({ pressed }) => [styles.stepBtn, pressed && styles.pressed, submitting && styles.disabled]}
+            >
+              <Ionicons name="add" size={20} color={colors.primary} />
+            </Pressable>
+          </View>
+          {insufficient ? (
+            <Text style={styles.insufficientText}>
+              La quantité dépasse le stock disponible.
+            </Text>
+          ) : null}
+
+          <View style={styles.totalCard}>
+            <View style={styles.totalCardText}>
+              <Text style={styles.totalCardLabel}>Total de la commande</Text>
+              <Text style={styles.totalCardHint}>
+                {validQuantity ? `${formatQuantity(quantity)} ${selected.unit} × ${formatFcfa(selected.salePrice)}` : "Quantité à renseigner"}
+              </Text>
+            </View>
+            <Text style={styles.totalCardValue}>{formatFcfa(total)}</Text>
+          </View>
+
+          <Text style={styles.fieldLabel}>Client (facultatif)</Text>
+          <TextInput
+            value={customerName}
+            onChangeText={setCustomerName}
+            placeholder="Client comptoir"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="words"
+            maxLength={120}
+            editable={!submitting}
+            style={styles.input}
+          />
+          <TextInput
+            value={customerPhone}
+            onChangeText={setCustomerPhone}
+            placeholder="Téléphone (facultatif)"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="phone-pad"
+            maxLength={40}
+            editable={!submitting}
+            style={styles.input}
+          />
+
+          <Text style={styles.fieldLabel}>Note (facultatif)</Text>
+          <TextInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="Ex. à retirer samedi matin"
+            placeholderTextColor={colors.textMuted}
+            maxLength={255}
+            editable={!submitting}
+            multiline
+            style={styles.noteInput}
+          />
+
+          {error ? (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle" size={16} color={colors.stockOut} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+
+          <Pressable
+            onPress={() => void submit()}
+            disabled={submitting}
+            accessibilityRole="button"
+            accessibilityLabel="Enregistrer la commande"
+            style={({ pressed }) => [styles.ctaPress, pressed && styles.pressed, submitting && styles.disabled]}
+          >
+            <LinearGradient
+              colors={[colors.primaryLight, colors.primaryDeep]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.cta}
+            >
+              {submitting ? (
+                <ActivityIndicator color={colors.onPrimary} />
+              ) : (
+                <>
+                  <Ionicons name="receipt-outline" size={18} color={colors.onPrimary} />
+                  <Text style={styles.ctaText}>Enregistrer la commande</Text>
+                </>
+              )}
+            </LinearGradient>
+          </Pressable>
+        </>
+      )}
     </Sheet>
   );
 }
@@ -868,6 +1213,96 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   declineWarningText: { flex: 1, fontSize: 10.5, fontWeight: "700", color: colors.stockOut, lineHeight: 15 },
+
+  pickerIntro: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
+    backgroundColor: "rgba(10,107,69,0.08)",
+    borderRadius: 11,
+    padding: 10,
+    marginBottom: 10,
+  },
+  pickerIntroText: { flex: 1, fontSize: 10.5, fontWeight: "700", color: colors.primary, lineHeight: 15 },
+  searchWrap: {
+    height: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  searchInput: { flex: 1, fontSize: 13, fontWeight: "700", color: colors.text, padding: 0 },
+  pickerEmpty: {
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    marginBottom: 10,
+  },
+  pickerEmptyText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+    lineHeight: 16,
+    textAlign: "center",
+  },
+  productOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 10,
+    marginBottom: 7,
+  },
+  productOptionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    backgroundColor: "rgba(10,107,69,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  productOptionText: { flex: 1 },
+  productOptionName: { fontSize: 12, fontWeight: "800", color: colors.text },
+  productOptionMeta: { fontSize: 9.5, fontWeight: "600", color: colors.textMuted, marginTop: 1 },
+  productOptionRight: { alignItems: "flex-end", gap: 3 },
+  productOptionPrice: { fontSize: 10.5, fontWeight: "900", color: colors.goldDark },
+
+  selectedProduct: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: colors.accentSoft,
+    borderRadius: 14,
+    padding: 11,
+    marginBottom: 10,
+  },
+  selectedProductIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  selectedProductText: { flex: 1 },
+  selectedProductName: { fontSize: 12.5, fontWeight: "900", color: colors.primaryDeep },
+  selectedProductMeta: { fontSize: 9.5, fontWeight: "600", color: colors.textMuted, marginTop: 1 },
+  changeLink: { fontSize: 10.5, fontWeight: "900", color: colors.primary, textDecorationLine: "underline" },
+  stockHintRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+  stockHintText: { fontSize: 10.5, fontWeight: "700", color: colors.primary },
+  insufficientText: { fontSize: 10.5, fontWeight: "700", color: colors.stockOut, marginTop: 6 },
 
   errorBox: {
     flexDirection: "row",

@@ -1,5 +1,6 @@
 /**
- * Onglet Commandes (vendeur) — boîte de réception du réseau :
+ * Onglet Commandes (vendeur) — gestion comptoir :
+ *  - création d'une commande sans compte client (client comptoir facultatif) ;
  *  - commandes en attente : confirmer la quantité ou refuser ;
  *  - commandes confirmées : encaisser (espèces / Orange Money / Moov / Wave) ;
  *  - historique : terminées, refusées, annulées.
@@ -26,7 +27,12 @@ import {
 } from "../api/orders";
 import type { ApiProduct } from "../api/products";
 import { OrderStatusChip } from "../ui/OrderStatusChip";
-import { ConfirmOrderModal, DeclineOrderModal, PaymentModal } from "./OrderModals";
+import {
+  ConfirmOrderModal,
+  CreateOrderModal,
+  DeclineOrderModal,
+  PaymentModal,
+} from "./OrderModals";
 
 type Filter = "pending" | "confirmed" | "all";
 
@@ -56,6 +62,7 @@ export function ProOrdersScreen({
   const [confirmTarget, setConfirmTarget] = useState<ApiOrder | null>(null);
   const [paymentTarget, setPaymentTarget] = useState<ApiOrder | null>(null);
   const [declineTarget, setDeclineTarget] = useState<ApiOrder | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const pendingOrders = useMemo(() => orders.filter((o) => o.status === "pending"), [orders]);
   const confirmedOrders = useMemo(() => orders.filter((o) => o.status === "confirmed"), [orders]);
@@ -90,7 +97,7 @@ export function ProOrdersScreen({
                 ? `${pendingOrders.length} en attente · ${confirmedOrders.length} à encaisser`
                 : confirmedOrders.length > 0
                   ? `${confirmedOrders.length} commande${confirmedOrders.length > 1 ? "s" : ""} à encaisser`
-                  : "Les scans de tes clients arrivent ici"}
+                  : "Crée une commande pour démarrer"}
             </Text>
           </View>
           <Pressable
@@ -102,6 +109,23 @@ export function ProOrdersScreen({
             <Ionicons name="refresh" size={17} color={colors.primary} />
           </Pressable>
         </View>
+
+        <Pressable
+          onPress={() => setCreateOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Créer une nouvelle commande"
+          style={({ pressed }) => [styles.createBtnWrap, pressed && styles.pressed]}
+        >
+          <LinearGradient
+            colors={[colors.primaryLight, colors.primaryDeep]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.createBtn}
+          >
+            <Ionicons name="add-circle" size={19} color={colors.onPrimary} />
+            <Text style={styles.createBtnText}>Nouvelle commande</Text>
+          </LinearGradient>
+        </Pressable>
 
         <View style={styles.filters}>
           {filters.map((item) => {
@@ -163,10 +187,10 @@ export function ProOrdersScreen({
             </Text>
             <Text style={styles.emptyText}>
               {filter === "pending"
-                ? "Quand un client scanne le QR d'un de tes produits, sa commande apparaît ici en temps réel."
+                ? "Crée une commande pour un client au comptoir : elle apparaîtra ici en attente de confirmation."
                 : filter === "confirmed"
                   ? "Les commandes confirmées t'attendent pour l'encaissement et la sortie de stock."
-                  : "Confirme les commandes, encaisse en boutique : ton historique complet s'affichera ici."}
+                  : "Crée, confirme et encaisse tes commandes : ton historique complet s'affichera ici."}
             </Text>
           </View>
         ) : (
@@ -203,6 +227,13 @@ export function ProOrdersScreen({
         onClose={() => setDeclineTarget(null)}
         onDone={onChanged}
       />
+      <CreateOrderModal
+        visible={createOpen}
+        token={token}
+        products={products}
+        onClose={() => setCreateOpen(false)}
+        onDone={onChanged}
+      />
     </View>
   );
 }
@@ -229,7 +260,7 @@ function ProOrderCard({
           <Text style={styles.clientInitials}>{order.client?.initials ?? "MS"}</Text>
         </View>
         <View style={styles.cardTopText}>
-          <Text style={styles.clientName} numberOfLines={1}>{order.client?.name ?? "Client"}</Text>
+          <Text style={styles.clientName} numberOfLines={1}>{order.client?.name ?? "Client comptoir"}</Text>
           <Text style={styles.meta} numberOfLines={1}>
             #{order.id} · {formatDateTimeShort(order.createdAt)}
           </Text>
@@ -355,6 +386,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+
+  createBtnWrap: { borderRadius: 15 },
+  createBtn: {
+    height: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderRadius: 15,
+  },
+  createBtnText: { fontSize: 13.5, fontWeight: "900", color: colors.onPrimary },
 
   filters: { flexDirection: "row", gap: 7 },
   filterChip: {

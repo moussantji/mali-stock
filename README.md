@@ -105,19 +105,25 @@ Profil → Administration). Il y retrouve les onglets **Boutiques** et **Vendeur
 
 Le QR code et les commandes sont des outils du vendeur : ils ne nécessitent aucun
 compte client. Chaque vendeur génère le QR de ses produits, scanne ses codes-barres
-et traite les commandes reçues depuis son tableau de bord.
+et gère ses commandes depuis son tableau de bord.
 
 - `GET /api/public/shops` — annuaire des boutiques (paramètre `search`)
 - `GET /api/public/shops/:id` — fiche boutique + catalogue
 - `GET /api/public/products/:qrToken` — fiche produit scannée
-- `POST /api/orders` — commande liée à un produit
+- `POST /api/orders/manual` — commande créée par le vendeur sans compte client
+  (`productId`, `quantity`, `customerName` et `customerPhone` facultatifs)
+- `POST /api/orders` — commande historique liée à un compte client (conservée)
 - `GET /api/orders` — boîte de réception du vendeur
 - `PATCH /api/orders/:id` — `confirm`, `decline`, `complete` ou `cancel`
 
-Le catalogue expose le **prix** et la **disponibilité**, jamais la quantité exacte ni
-le jeton QR. Le vendeur confirme la quantité, encaisse (espèces, Orange Money,
-Moov Africa, Wave Mali) et la sortie de stock est journalisée dans une transaction
-MySQL. L'ancienne interface acheteur a été retirée de l'application mobile.
+Depuis l'onglet **Commandes**, le vendeur appuie sur **Nouvelle commande**, choisit
+un produit de son stock, la quantité et, s'il le souhaite, le nom et le téléphone du
+client comptoir. La commande apparaît ensuite **En attente** : il peut la confirmer
+(quantité ajustable), la refuser ou l'encaisser directement. L'encaissement
+(espèces, Orange Money, Moov Africa, Wave Mali) crée la sortie de stock dans une
+transaction MySQL. Le catalogue public expose le **prix** et la **disponibilité**,
+jamais la quantité exacte ni le jeton QR. L'ancienne interface acheteur a été
+retirée de l'application mobile.
 
 ---
 
@@ -152,6 +158,7 @@ convertit tous les anciens comptes en vendeurs :
 cd server
 npm run migrate:admin     # migration 005 — colonne is_admin
 npm run migrate:sellers   # migration 006 — tous les comptes deviennent vendeurs
+npm run migrate:orders    # migration 007 — commandes vendeur sans compte client
 ```
 
 Côté mobile, le JWT est conservé dans **expo-secure-store** (Keychain / Keystore),
@@ -205,13 +212,14 @@ Pour l'activer plus tard :
 | `src/auth/AuthContext.tsx` | Session, inscription, connexion, Google, déconnexion |
 | `src/auth/api.ts` | Client fetch typé, URL auto-détectée, erreurs réseau |
 | `src/auth/storage.ts` | JWT dans SecureStore (localStorage sur web) |
-| `src/screens/ProOrdersScreen.tsx` | Boîte de réception et traitement des commandes |
+| `src/screens/ProOrdersScreen.tsx` | Gestion des commandes vendeur (création, confirmation, encaissement) |
+| `src/screens/OrderModals.tsx` | Modales de création, confirmation, refus et encaissement |
 | `src/screens/AdminScreen.tsx` | Administration : onglets Boutiques et Vendeurs |
 | `src/screens/AdminShopsPanel.tsx` | Liste des boutiques, édition des infos et stock en lecture seule |
 | `server/src/routes/auth.js` | Inscription vendeur / login / Google / me / logout |
 | `server/src/routes/admin.js` | Comptes vendeurs, boutiques et stocks (admin) |
 | `server/src/routes/public.js` | Fiche produit QR, annuaire et fiches boutiques |
-| `server/src/routes/orders.js` | Cycle de vie des commandes et sortie de stock |
+| `server/src/routes/orders.js` | Création manuelle, cycle de vie des commandes et sortie de stock |
 | `server/src/middleware/auth.js` | Vérification du Bearer JWT et des rôles |
 | `server/sql/schema.sql` | Tables `users`, `products`, `stock_movements`, `orders` |
 
